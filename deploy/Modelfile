@@ -1,0 +1,10 @@
+# Ollama özel model tanımı:  ollama create cmms-llm -f deploy/Modelfile
+# OpenAI uyumlu /v1 ucu num_ctx parametresini kabul etmez; bağlam
+# penceresini burada sabitliyoruz.
+FROM qwen2.5:3b-instruct
+
+# 4096 token: router + facts + cevap için fazlasıyla yeterli. Büyütmek
+# KV-cache belleğini ve ilk token süresini artırır.
+PARAMETER num_ctx 4096
+PARAMETER temperature 0.2
+PARAMETER num_predict 512

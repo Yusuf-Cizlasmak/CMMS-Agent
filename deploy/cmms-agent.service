@@ -1,0 +1,18 @@
+# /etc/systemd/system/cmms-agent.service
+# Yolları kendi kurulumunuza göre düzenleyin, sonra:
+#   sudo systemctl daemon-reload && sudo systemctl enable --now cmms-agent
+[Unit]
+Description=CMMS Agent API
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+User=jetson
+WorkingDirectory=/home/jetson/CMMS-Agent
+EnvironmentFile=/home/jetson/CMMS-Agent/.env
+# workers=1: tek LLM örneği var; çok worker = gereksiz bellek
+ExecStart=/home/jetson/CMMS-Agent/.venv/bin/uvicorn cmms_agent.api:app --host 0.0.0.0 --port 8088 --workers 1
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

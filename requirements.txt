@@ -1,0 +1,7 @@
+# Elasticsearch istemcisinin ANA sürümü sunucunuzla aynı olmalı
+# (ES 8.x sunucu -> elasticsearch>=8,<9 ; ES 9.x -> elasticsearch>=9,<10)
+elasticsearch>=8.12,<9
+httpx>=0.27
+# HTTP API (opsiyonel ama önerilir)
+fastapi>=0.110
+uvicorn>=0.29
