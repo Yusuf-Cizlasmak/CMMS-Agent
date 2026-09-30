@@ -63,6 +63,11 @@ def cmd_doctor(s) -> int:
         except Exception as e:  # noqa: BLE001
             ok = False
             print(f"Index          {s.wo_index} ... HATA: {e}")
+        if repo.index_exists(s.readings_index):
+            n = repo.es.count(index=s.readings_index)["count"]
+            print(f"Sensör index   {s.readings_index} ... OK, {n} ölçüm")
+        else:
+            print(f"Sensör index   {s.readings_index} ... yok (opsiyonel, sensor_health devre dışı)")
     else:
         ok = False
         print("ULAŞILAMIYOR")

@@ -182,6 +182,14 @@ def asset_reliability(ctx: ToolContext, args: dict) -> dict:
     prof = A.reliability_profile(asset, times, reps, now - timedelta(days=days), now, horizon)
     out = prof.to_dict()
     out["last_failures"] = [t.date().isoformat() for t in sorted(times)[-5:]]
+    try:
+        sensor_rows = _sensor_rows(ctx, 30, 24, asset)
+    except Exception:  # noqa: BLE001 - sensör verisi opsiyonel
+        sensor_rows = None
+    if sensor_rows:
+        out["sensors"] = [{k: r[k] for k in ("metric", "recent_avg", "z_score",
+                                              "trend_pct_per_day", "status")}
+                          for r in sensor_rows]
     return out
 
 
@@ -195,15 +203,30 @@ def failure_risk_ranking(ctx: ToolContext, args: dict) -> dict:
         if len(times) < 2:          # tek arızadan risk tahmini yapmıyoruz
             continue
         profiles.append(A.reliability_profile(asset, times, reps, start, now, horizon))
-    profiles.sort(key=lambda p: (p.risk_pct or 0, p.laplace_u or 0), reverse=True)
+    # İki bağımsız kanıt: geçmiş (iş emirleri) + şimdi (sensörler).
+    # Sensörde alarm olan ekipmanı öne alan basit, açıklanabilir bir kural:
+    # kritik x1.3, uyarı x1.15. (Katsayılar sezgiseldir; kendi verinizle ayarlayın.)
+    sensors = sensor_scores(ctx)
+    boost = {"kritik": 1.3, "uyarı": 1.15}
+
+    def score(p: A.ReliabilityProfile) -> float:
+        st = sensors.get(p.asset_id, {}).get("sensor_status")
+        return (p.risk_pct or 0) * boost.get(st, 1.0)
+
+    profiles.sort(key=lambda p: (score(p), p.laplace_u or 0), reverse=True)
     keep = ("asset_id", "failures", "mtbf_days", "days_since_last_failure",
             "risk_pct", "risk_level", "trend", "weibull_beta")
+    ranking = []
+    for p in profiles[:n]:
+        row = {k: v for k, v in p.to_dict().items() if k in keep}
+        row.update(sensors.get(p.asset_id, {}))
+        ranking.append(row)
     return {
         "period_days": days,
         "horizon_days": horizon,
         "assets_evaluated": len(profiles),
-        "ranking": [{k: v for k, v in p.to_dict().items() if k in keep}
-                    for p in profiles[:n]],
+        "sensor_data": bool(sensors),
+        "ranking": ranking,
     }
 
 
@@ -309,6 +332,97 @@ def open_backlog(ctx: ToolContext, args: dict) -> dict:
     }
 
 
+# --------------------------------------------------------------------------- #
+# Sensör / durum izleme
+# --------------------------------------------------------------------------- #
+_STATUS_ORDER = {"kritik": 0, "uyarı": 1, "normal": 2, "yetersiz_veri": 3}
+
+
+def _sensor_rows(ctx: ToolContext, days: int, recent_hours: int,
+                 asset: str | None) -> list[dict] | None:
+    """Her (ekipman, metrik) için referans vs son dönem karşılaştırması.
+
+    Tek bir aggregation isteği: ekipman → metrik → {referans istatistik,
+    son dönem ortalaması, günlük ortalamalar}. Ham ölçümler Jetson'a hiç
+    gelmez; 20.000 ölçüm yerine birkaç KB sonuç gelir.
+    """
+    repo, s = ctx.repo, ctx.repo.s
+    rf, idx = s.reading_fields, s.readings_index
+    if not repo.index_exists(idx):
+        return None
+    cutoff = f"now-{recent_hours}h"
+    q = repo.bool_query({"range": {rf.timestamp: {"gte": f"now-{days}d/d"}}},
+                        {"term": {rf.asset: asset}} if asset else None)
+    aggs = {"assets": {
+        "terms": {"field": rf.asset, "size": 100},
+        "aggs": {"metrics": {
+            "terms": {"field": rf.metric, "size": 20},
+            "aggs": {
+                # Referans dönem, trend penceresinden (son 7 gün) ÖNCE biter.
+                # Aksi halde yavaş bozulma referansın içine sızar, ortalamayı
+                # ve std'yi şişirir ve sapma "normal" görünür.
+                "base": {"filter": {"range": {rf.timestamp: {"lt": "now-7d/d"}}},
+                         "aggs": {"st": {"extended_stats": {"field": rf.value}}}},
+                "recent": {"filter": {"range": {rf.timestamp: {"gte": cutoff}}},
+                           "aggs": {"st": {"stats": {"field": rf.value}}}},
+                "daily": {"date_histogram": {"field": rf.timestamp,
+                                             "fixed_interval": "1d"},
+                          "aggs": {"avg": {"avg": {"field": rf.value}}}},
+            },
+        }},
+    }}
+    r = repo.aggregate(q, aggs, index=idx)
+    rows = []
+    for a in r["assets"]["buckets"]:
+        for m in a["metrics"]["buckets"]:
+            base, recent = m["base"]["st"], m["recent"]["st"]
+            dev = A.sensor_deviation(base.get("avg"), base.get("std_deviation"),
+                                     recent.get("avg"),
+                                     [d["avg"]["value"] for d in m["daily"]["buckets"]])
+            rows.append({
+                "asset_id": a["key"], "metric": m["key"],
+                "baseline_avg": _r(base.get("avg")),
+                "recent_avg": _r(recent.get("avg")), "recent_max": _r(recent.get("max")),
+                "z_score": _r(dev["z_score"]),
+                "trend_pct_per_day": _r(dev["trend_pct_per_day"]),
+                "status": dev["status"],
+            })
+    rows.sort(key=lambda x: (_STATUS_ORDER[x["status"]], -abs(x["z_score"] or 0)))
+    return rows
+
+
+def sensor_health(ctx: ToolContext, args: dict) -> dict:
+    # En az 14 gün: referans dönem = [days önce, 7 gün önce)
+    days = max(14, min(_days(ctx, {"days": args.get("days") or 30}), 90))
+    recent_hours = int(args.get("recent_hours") or 24)
+    asset = resolve_asset(ctx, args.get("asset_id"))
+    rows = _sensor_rows(ctx, days, recent_hours, asset)
+    if rows is None:
+        return {"note": f"Sensör index'i ({ctx.repo.s.readings_index}) bulunamadı; "
+                        "durum izleme verisi yok."}
+    alerts = [r for r in rows if r["status"] in ("kritik", "uyarı")]
+    return {
+        "baseline_days": days, "recent_hours": recent_hours, "asset_id": asset,
+        "metrics_checked": len(rows), "alerts_count": len(alerts),
+        # Ekipman sorulduysa tüm metrikleri, genel soruda sadece alarmları ver
+        "readings": rows if asset else alerts[:_top_n(args, 10)],
+    }
+
+
+def sensor_scores(ctx: ToolContext, days: int = 30) -> dict[str, dict]:
+    """Ekipman başına en kötü sensör durumu (risk sıralamasını zenginleştirir)."""
+    try:
+        rows = _sensor_rows(ctx, days, 24, None) or []
+    except Exception:  # noqa: BLE001 - sensör verisi opsiyonel
+        return {}
+    out: dict[str, dict] = {}
+    for r in rows:   # rows zaten en kötüden iyiye sıralı
+        out.setdefault(r["asset_id"], {"sensor_status": r["status"],
+                                       "sensor_metric": r["metric"],
+                                       "sensor_z": r["z_score"]})
+    return out
+
+
 TOOLS: dict[str, Tool] = {t.name: t for t in [
     Tool("kpi_summary", "Genel bakım KPI özeti: iş emri sayıları, MTTR, duruş, maliyet, PM uyumu",
          "days, asset_id?", kpi_summary),
@@ -326,4 +440,6 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
          "text (zorunlu), days, asset_id?", search_workorders),
     Tool("open_backlog", "Açık/bekleyen iş emirleri, önceliğe göre dağılım, en eski işler",
          "asset_id?", open_backlog),
+    Tool("sensor_health", "Sensör/durum izleme: titreşim, sıcaklık, akım gibi ölçümlerde "
+         "normalden sapma ve bozulma trendi", "asset_id?, days, recent_hours?", sensor_health),
 ]}

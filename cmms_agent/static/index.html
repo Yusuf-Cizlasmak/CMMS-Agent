@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CMMS Agent</title>
+<style>
+  /* Harici bağımlılık yok: fabrika ağında internet olmayabilir. */
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #667085;
+    --border: #e3e6eb; --accent: #1f6feb; --user: #e8f0fe; --code: #f1f3f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1216; --panel: #171b21; --text: #e6e9ee; --muted: #8b95a5;
+      --border: #2a3039; --accent: #4c8dff; --user: #1c2a42; --code: #0c0f13;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 16px; min-height: 100vh;
+          display: flex; flex-direction: column; gap: 12px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  h1 { font-size: 18px; margin: 0; }
+  .status { font-size: 12px; color: var(--muted); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+         background: var(--muted); margin: 0 4px 0 10px; }
+  .ok { background: #2da44e; } .bad { background: #d1242f; }
+  #log { flex: 1; display: flex; flex-direction: column; gap: 10px; }
+  .msg { padding: 10px 14px; border-radius: 10px; border: 1px solid var(--border);
+         background: var(--panel); white-space: pre-wrap; word-wrap: break-word; }
+  .msg.user { background: var(--user); align-self: flex-end; max-width: 85%; }
+  .meta { font-size: 12px; color: var(--muted); margin-top: 6px; white-space: normal; }
+  details { margin-top: 6px; font-size: 12px; }
+  pre { background: var(--code); padding: 8px; border-radius: 6px; overflow-x: auto;
+        max-height: 320px; margin: 6px 0 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { border: 1px solid var(--border); background: var(--panel); color: var(--text);
+          border-radius: 999px; padding: 4px 10px; font-size: 13px; cursor: pointer; }
+  .chip:hover { border-color: var(--accent); }
+  form { display: flex; gap: 8px; position: sticky; bottom: 0; background: var(--bg);
+         padding: 8px 0 4px; }
+  input { flex: 1; min-width: 0; padding: 10px 12px; border-radius: 8px; font: inherit;
+          border: 1px solid var(--border); background: var(--panel); color: var(--text); }
+  button[type=submit] { padding: 10px 16px; border: 0; border-radius: 8px;
+          background: var(--accent); color: #fff; font: inherit; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: wait; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>CMMS Agent</h1>
+    <div class="status" id="status">Elastic<span class="dot" id="es"></span>
+      LLM<span class="dot" id="llm"></span></div>
+  </header>
+  <div class="chips" id="chips"></div>
+  <div id="log"></div>
+  <form id="f">
+    <input id="q" placeholder="Bakım verisi hakkında bir soru sorun…" autocomplete="off" autofocus>
+    <button type="submit" id="send">Sor</button>
+  </form>
+</div>
+<script>
+const EXAMPLES = [
+  "Önümüzdeki ay hangi ekipmanlar arızalanabilir?",
+  "Sensörlerde anormal bir durum var mı?",
+  "Son 90 günde en çok arıza yapan 5 makine",
+  "Açık iş emirleri ne durumda?",
+  "Arıza sayısı aylık olarak artıyor mu?",
+];
+const $ = (id) => document.getElementById(id);
+const log = $("log");
+
+for (const e of EXAMPLES) {
+  const b = document.createElement("button");
+  b.className = "chip"; b.type = "button"; b.textContent = e;
+  b.onclick = () => ask(e);
+  $("chips").appendChild(b);
+}
+
+fetch("health").then(r => r.json()).then(h => {
+  $("es").classList.add(h.elasticsearch ? "ok" : "bad");
+  $("llm").classList.add(h.llm ? "ok" : "bad");
+}).catch(() => {});
+
+function bubble(cls, text) {
+  const d = document.createElement("div");
+  d.className = "msg " + cls; d.textContent = text;
+  log.appendChild(d); d.scrollIntoView({block: "end"});
+  return d;
+}
+
+async function ask(question) {
+  if (!question.trim()) return;
+  $("q").value = ""; $("send").disabled = true;
+  bubble("user", question);
+  const out = bubble("bot", "…");
+  let text = "";
+  try {
+    // EventSource sadece GET destekler; POST + akış okuyucu kullanıyoruz.
+    const resp = await fetch("ask/stream", {
+      method: "POST", headers: {"content-type": "application/json"},
+      body: JSON.stringify({question}),
+    });
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const {value, done} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream: true});
+      let i;
+      while ((i = buf.indexOf("\n\n")) >= 0) {
+        const block = buf.slice(0, i); buf = buf.slice(i + 2);
+        const isDone = block.startsWith("event: done");
+        const data = block.split("\n").find(l => l.startsWith("data: "));
+        if (!data) continue;
+        const obj = JSON.parse(data.slice(6));
+        if (isDone) {
+          showMeta(out, obj);
+        } else {
+          text += obj.token; out.firstChild.textContent = text;
+          out.scrollIntoView({block: "end"});
+        }
+      }
+    }
+  } catch (err) {
+    out.textContent = "Hata: " + err;
+  } finally {
+    $("send").disabled = false; $("q").focus();
+  }
+}
+
+function showMeta(el, r) {
+  const t = r.timings_ms || {};
+  const m = document.createElement("div");
+  m.className = "meta";
+  m.textContent = `${r.tool} · ${r.route_source} · ilk token ${t.first_token} ms · toplam ${t.total} ms`;
+  const det = document.createElement("details");
+  const sum = document.createElement("summary");
+  sum.textContent = "Kullanılan veri";
+  const pre = document.createElement("pre");
+  pre.textContent = JSON.stringify({args: r.args, facts: r.facts}, null, 1);
+  det.append(sum, pre);
+  el.append(m, det);
+}
+
+$("f").onsubmit = (e) => { e.preventDefault(); ask($("q").value); };
+</script>
+</body>
+</html>

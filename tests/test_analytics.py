@@ -75,3 +75,22 @@ def test_parse_ts():
     assert A.parse_ts("2026-01-01T00:00:00Z") == NOW
     assert A.parse_ts(1767225600000) == NOW
     assert A.parse_ts(None) is None
+
+
+def test_risk_is_capped():
+    start = NOW - timedelta(days=100)
+    ts = [start + timedelta(days=d) for d in range(5, 100, 5)]   # çok düzenli, sık
+    p = A.reliability_profile("X", ts, [], start, NOW, 60)
+    assert p.risk_pct == 99.0
+
+
+def test_sensor_deviation_levels():
+    flat = [10.0] * 7
+    assert A.sensor_deviation(10, 1, 10.5, flat)["status"] == "normal"
+    assert A.sensor_deviation(10, 1, 12.5, flat)["status"] == "uyarı"
+    assert A.sensor_deviation(10, 1, 13.5, flat)["status"] == "kritik"
+    # z küçük ama günlük %6 artış -> yavaş bozulma yakalanır
+    rising = [10, 10.6, 11.2, 11.8, 12.4, 13.0, 13.6]
+    d = A.sensor_deviation(10, 5, 11, rising)
+    assert d["status"] == "kritik" and d["trend_pct_per_day"] > 5
+    assert A.sensor_deviation(None, None, None, [])["status"] == "yetersiz_veri"

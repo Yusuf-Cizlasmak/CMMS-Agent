@@ -29,7 +29,8 @@ tasarlandı. Kodun her dosyası *neden* öyle yazıldığını açıklar.
 | 2 | [docs/02-jetson-kurulum.md](docs/02-jetson-kurulum.md) | Jetson Orin Nano: hangi LLM motoru, hangi model, hangi kütüphane, bellek hesabı |
 | 3 | [docs/03-elastic-veri.md](docs/03-elastic-veri.md) | Elastic'ten veriyi doğru çekmek: yetki, mapping, aggregation, PIT |
 | 4 | [docs/04-analitik-ve-ongoru.md](docs/04-analitik-ve-ongoru.md) | MTBF, MTTR, Weibull, Laplace trend testi — öngörünün matematiği |
-| 5 | [docs/05-genisletme.md](docs/05-genisletme.md) | Yeni araç ekleme, değerlendirme, sensör verisi, ince ayar (LoRA) |
+| 5 | [docs/05-genisletme.md](docs/05-genisletme.md) | Yeni araç ekleme, gelişmiş modeller, RAG, ince ayar (LoRA) |
+| 6 | [docs/06-sensor-ve-degerlendirme.md](docs/06-sensor-ve-degerlendirme.md) | Sensör verisiyle durum izleme, agent'ı ölçmek (eval) |
 
 ## Mimari (özet)
 
@@ -86,7 +87,12 @@ uvicorn cmms_agent.api:app --host 0.0.0.0 --port 8088
 
 Ayrıntılar: [docs/02-jetson-kurulum.md](docs/02-jetson-kurulum.md)
 
-### HTTP API
+### Web arayüzü ve HTTP API
+
+API çalışırken tarayıcıdan `http://<jetson-ip>:8088/` adresini açın. Sade bir
+sohbet ekranı gelir: cevap token token akar, her cevabın altında kullanılan
+araç, süreler ve "Kullanılan veri" (facts) görünür. Harici bağımlılığı
+yoktur, internetsiz fabrika ağında da çalışır.
 
 ```bash
 curl -s localhost:8088/ask -H 'content-type: application/json' \
@@ -107,6 +113,11 @@ curl -N localhost:8088/ask/stream -H 'content-type: application/json' \
 | `failure_modes` | Arıza kodu Pareto'su | "En sık arıza türleri" |
 | `search_workorders` | Açıklamada tam metin (Türkçe analyzer) arama | "'rulman ses' geçen iş emirleri" |
 | `open_backlog` | Açık işler, öncelik dağılımı, en eski işler | "Bekleyen işler ne durumda?" |
+| `sensor_health` | Sensörlerde normalden sapma (z-skoru) ve bozulma eğimi | "Sensörlerde anormal bir durum var mı?" |
+
+Sensör index'i (`cmms-readings`) varsa `failure_risk_ranking` ve
+`asset_reliability` geçmiş iş emirlerini **anlık sensör durumuyla**
+birleştirir.
 
 ## Proje yapısı
 
@@ -120,14 +131,19 @@ cmms_agent/
   llm.py         # OpenAI-uyumlu yerel LLM istemcisi (Ollama/llama.cpp/MLC)
   agent.py       # orkestrasyon, anlatıcı prompt'u, zamanlama ölçümü
   cache.py       # TTL önbellek
+  evaluation.py  # router doğruluğu + sayı dayanaklılığı (grounding) ölçümü
   cli.py, api.py # arayüzler
-scripts/         # jetson_setup.sh, seed_sample_data.py, benchmark.py
+  static/        # web sohbet arayüzü (tek HTML dosyası)
+eval/            # değerlendirme soru seti
+scripts/         # jetson_setup.sh, seed_sample_data.py, benchmark.py, evaluate.py
 deploy/          # Modelfile, llama-server betiği, systemd servisleri
 tests/           # birim + gerçek ES entegrasyon testleri
 ```
 
-## Testler
+## Testler ve değerlendirme
 
 ```bash
-pytest                    # ES yoksa entegrasyon testleri otomatik atlanır
+pytest                                   # ES yoksa entegrasyon testleri otomatik atlanır
+python scripts/evaluate.py               # router doğruluğu (eval/questions.jsonl)
+python scripts/evaluate.py --mode hybrid --full   # + LLM cevapları, uydurma sayı kontrolü, süre
 ```

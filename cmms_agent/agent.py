@@ -39,7 +39,10 @@ NARRATOR_SYSTEM = (
     "4. Risk yüzdeleri istatistiksel tahmindir; kesinlik iddia etme.\n"
     "Terimler: MTBF=arızalar arası ortalama süre, MTTR=ortalama onarım süresi, "
     "Weibull beta>1 aşınma/yaşlanma, beta<1 erken dönem arızası, "
-    "trend 'kötüleşiyor'=arızalar istatistiksel olarak sıklaşıyor."
+    "trend 'kötüleşiyor'=arızalar istatistiksel olarak sıklaşıyor, "
+    "sensör z_score=son 24 saatin normalden kaç standart sapma uzak olduğu, "
+    "trend_pct_per_day=sensör değerinin günlük yüzde değişimi. "
+    "Sensör 'kritik' ise bunu cevabın başında vurgula."
 )
 
 GENERAL_SYSTEM = (

@@ -14,6 +14,9 @@ from cmms_agent.router import extract_entities, route, route_by_rules
     ("'rulman ses' geçen iş emirleri", "search_workorders"),
     ("Bu yılın bakım KPI özeti", "kpi_summary"),
     ("MTBF nedir?", "none"),
+    ("Sensörlerde anormal bir durum var mı?", "sensor_health"),
+    ("KMP-003 titreşim değerleri nasıl?", "sensor_health"),
+    ("Gelecek hafta arıza çıkarması muhtemel ekipmanlar", "failure_risk_ranking"),
 ])
 def test_rules(q, tool):
     r = route_by_rules(q)
@@ -55,3 +58,23 @@ def test_llm_fallback_merges_regex_entities():
 def test_llm_invalid_tool_falls_back():
     r = route("xyz", llm=FakeLLM({"tool": "rm_rf", "args": {}}), mode="hybrid")
     assert r.tool == "kpi_summary" and r.source == "fallback"
+
+
+def test_search_text_extraction():
+    assert route_by_rules("yağ kaçağına benzer kayıtları bul").args["text"] == "yağ kaçağına"
+    assert route_by_rules("ara: rulman sesi").args["text"] == "rulman sesi"
+
+
+def test_eval_set_rules_accuracy():
+    """eval/questions.jsonl kural router ile %100 geçmeli (regresyon koruması)."""
+    from pathlib import Path
+
+    from cmms_agent.evaluation import load_cases, route_matches
+    cases = load_cases(Path(__file__).parent.parent / "eval" / "questions.jsonl")
+    failures = []
+    for c in cases:
+        r = route(c.q, mode="rules")
+        ok, errs = route_matches(r.tool, r.args, c)
+        if not ok:
+            failures.append((c.q, errs))
+    assert not failures, failures

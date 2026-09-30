@@ -43,6 +43,7 @@ class CMMSRepository:
         self.es = es
         self.s = settings
         self.f = settings.fields
+        self._exists: dict[str, bool] = {}
 
     # ------------------------------------------------------------------ #
     # Sorgu yapı taşları
@@ -65,10 +66,10 @@ class CMMSRepository:
     # ------------------------------------------------------------------ #
     # Çalıştırıcılar
     # ------------------------------------------------------------------ #
-    def aggregate(self, query: dict, aggs: dict) -> dict:
+    def aggregate(self, query: dict, aggs: dict, index: str | None = None) -> dict:
         """size=0: belge döndürme, sadece aggregation sonucu -> çok hızlı."""
         resp = self.es.search(
-            index=self.s.wo_index, query=query, aggs=aggs, size=0,
+            index=index or self.s.wo_index, query=query, aggs=aggs, size=0,
             track_total_hits=True,
         )
         out = dict(resp.get("aggregations", {}))
@@ -123,6 +124,16 @@ class CMMSRepository:
                 self.es.close_point_in_time(id=pit_id)
             except Exception:  # noqa: BLE001 - kapatma hatası kritik değil
                 pass
+
+    def index_exists(self, index: str) -> bool:
+        """Sonuç önbelleğe alınır: opsiyonel index'ler için her soruda
+        ekstra bir istek atmayalım."""
+        if index not in self._exists:
+            try:
+                self._exists[index] = bool(self.es.indices.exists(index=index))
+            except Exception:  # noqa: BLE001 - yetki yoksa yok say
+                self._exists[index] = False
+        return self._exists[index]
 
     def ping(self) -> bool:
         try:

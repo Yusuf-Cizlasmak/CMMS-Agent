@@ -6,6 +6,7 @@ bağlanır.
     POST /ask         {"question": "..."}   -> tek seferde JSON cevap
     POST /ask/stream  {"question": "..."}   -> Server-Sent Events (token akışı)
     GET  /health
+    GET  /                                  -> basit web sohbet arayüzü
 
 Not: Jetson'da tek bir LLM örneği vardır; aynı anda gelen istekler LLM
 sunucusunda sıraya girer. `workers=1` kullanın (her worker ayrı bellek demek).
@@ -13,9 +14,10 @@ sunucusunda sıraya girer. `workers=1` kullanın (her worker ayrı bellek demek)
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from . import build_agent
@@ -34,6 +36,11 @@ def agent():
 
 class AskRequest(BaseModel):
     question: str
+
+
+@app.get("/", include_in_schema=False)
+def index() -> FileResponse:
+    return FileResponse(Path(__file__).parent / "static" / "index.html")
 
 
 @app.get("/health")

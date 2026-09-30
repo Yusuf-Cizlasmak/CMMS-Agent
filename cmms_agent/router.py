@@ -94,6 +94,22 @@ def _has(q: str, *words: str) -> bool:
     return any(w in q for w in words)
 
 
+_FILLER_RE = re.compile(r"\b(iş emirleri|iş emri|kayıtları|kayıt|arızaları|bul|ara|göster|"
+                        r"listele|var mı|olan|lütfen)\b")
+
+
+def _search_text(q: str) -> str:
+    """'yağ kaçağına benzer kayıtları bul' -> 'yağ kaçağına'
+       'ara: rulman sesi'                 -> 'rulman sesi'"""
+    parts = re.split(r"benzer|içeren|ara:|bul:", q, maxsplit=1)
+    for cand in parts:   # önce anahtar kelimeden öncesi, boşsa sonrası
+        cand = _FILLER_RE.sub(" ", cand)
+        cand = re.sub(r"\s+", " ", cand).strip(" ?.,:")
+        if cand:
+            return cand
+    return q.strip(" ?.")
+
+
 def route_by_rules(question: str) -> Route | None:
     q = tr_lower(question)
     args = extract_entities(question)
@@ -101,8 +117,11 @@ def route_by_rules(question: str) -> Route | None:
 
     if _has(q, "nedir", "ne demek", "nasıl hesaplan") and not asset and not _has(q, "bizim", "durum"):
         return Route(NONE_TOOL, args)
+    if _has(q, "sensör", "sensor", "titreşim", "sıcaklı", "sıcaklık", "akım değer",
+            "durum izleme", "ölçüm", "canlı veri", "şu an nasıl", "anlık durum"):
+        return Route("sensor_health", args)
     if _has(q, "risk", "öngör", "tahmin", "arızalanabilir", "arızalanır", "olasılı",
-            "ihtimal", "bozulabilir", "bozulur mu", "predict"):
+            "ihtimal", "muhtemel", "bozulabilir", "bozulur mu", "arıza çıkar", "predict"):
         if _has(q, "trend", "iş emri sayı", "kaç iş emri"):
             return Route("workorder_trend", args)
         return Route("asset_reliability" if asset else "failure_risk_ranking", args)
@@ -112,7 +131,7 @@ def route_by_rules(question: str) -> Route | None:
         return Route("open_backlog", args)
     if _has(q, "benzer", "içeren", "geçen iş emir", "ara:", "bul:") or "text" in args:
         if "text" not in args:
-            args["text"] = re.split(r"benzer|içeren|ara:|bul:", q, maxsplit=1)[-1].strip(" ?.")
+            args["text"] = _search_text(q)
         return Route("search_workorders", args)
     if _has(q, "trend", "eğilim", "artıyor", "azalıyor", "artış", "aylık", "haftalık",
             "zaman içinde", "anomali"):
@@ -147,6 +166,7 @@ ROUTE_SCHEMA = {
                 "top_n": {"type": "integer"},
                 "text": {"type": "string"},
                 "interval": {"type": "string", "enum": ["day", "week", "month"]},
+                "recent_hours": {"type": "integer"},
             },
         },
     },
@@ -170,7 +190,9 @@ def router_system_prompt() -> str:
         'S: "Geçen çeyrekte en çok duruşa sebep olan makineler"\n'
         '{"tool":"top_failing_assets","args":{"days":90}}\n'
         'S: "rulman sesi şikayeti olan iş emirleri"\n'
-        '{"tool":"search_workorders","args":{"text":"rulman ses"}}'
+        '{"tool":"search_workorders","args":{"text":"rulman ses"}}\n'
+        'S: "Kompresörlerde normal dışı bir değer var mı?"\n'
+        '{"tool":"sensor_health","args":{}}'
     )
 
 

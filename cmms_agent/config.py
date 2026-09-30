@@ -76,6 +76,19 @@ class FieldMap:
 
 
 @dataclass(frozen=True)
+class ReadingFieldMap:
+    """Sensör / durum izleme index'i (opsiyonel). Her belge tek bir ölçüm:
+    {asset_id, metric, value, @timestamp}. Geniş format (her metrik ayrı
+    alan) kullanıyorsanız bir ingest pipeline veya transform ile uzun formata
+    çevirmeniz gerekir (bkz. docs/06-sensor-verisi.md).
+    """
+    asset: str = "asset_id"
+    metric: str = "metric"
+    value: str = "value"
+    timestamp: str = "@timestamp"
+
+
+@dataclass(frozen=True)
 class Settings:
     # --- Elasticsearch ---
     es_url: str = "http://localhost:9200"
@@ -87,6 +100,7 @@ class Settings:
     es_timeout: int = 15
     wo_index: str = "cmms-workorders"
     max_docs: int = 50_000                # tek analizde çekilecek en fazla belge
+    readings_index: str = "cmms-readings" # sensör index'i (yoksa araç devre dışı)
 
     # --- LLM (OpenAI uyumlu uç: Ollama, llama.cpp llama-server, MLC, vLLM) ---
     llm_base_url: str = "http://localhost:11434/v1"
@@ -107,6 +121,7 @@ class Settings:
     language: str = "tr"
 
     fields: FieldMap = field(default_factory=FieldMap)
+    reading_fields: ReadingFieldMap = field(default_factory=ReadingFieldMap)
 
 
 def _csv(key: str, default: tuple[str, ...]) -> tuple[str, ...]:
@@ -141,6 +156,13 @@ def load_settings(env_file: str = ".env") -> Settings:
         completed_status_values=_csv("CMMS_COMPLETED_STATUS_VALUES",
                                      d.completed_status_values),
     )
+    rd = ReadingFieldMap()
+    rfm = ReadingFieldMap(
+        asset=_env("CMMS_RFIELD_ASSET", rd.asset),
+        metric=_env("CMMS_RFIELD_METRIC", rd.metric),
+        value=_env("CMMS_RFIELD_VALUE", rd.value),
+        timestamp=_env("CMMS_RFIELD_TIMESTAMP", rd.timestamp),
+    )
     s = Settings()
     return Settings(
         es_url=_env("ES_URL", s.es_url),
@@ -152,6 +174,7 @@ def load_settings(env_file: str = ".env") -> Settings:
         es_timeout=_env_int("ES_TIMEOUT", s.es_timeout),
         wo_index=_env("CMMS_WO_INDEX", s.wo_index),
         max_docs=_env_int("CMMS_MAX_DOCS", s.max_docs),
+        readings_index=_env("CMMS_READINGS_INDEX", s.readings_index),
         llm_base_url=_env("LLM_BASE_URL", s.llm_base_url),
         llm_model=_env("LLM_MODEL", s.llm_model),
         llm_api_key=_env("LLM_API_KEY", s.llm_api_key),
@@ -164,4 +187,5 @@ def load_settings(env_file: str = ".env") -> Settings:
         cache_ttl_s=_env_int("CACHE_TTL_S", s.cache_ttl_s),
         language=_env("AGENT_LANGUAGE", s.language),
         fields=fm,
+        reading_fields=rfm,
     )

@@ -34,6 +34,9 @@ JSON şeması `TOOLS`'tan otomatik türetilir.
 
 ## 5.2 Değerlendirme (evaluation) — "iyi çalışıyor mu?" sorusunu ölçmek
 
+> ✅ Uygulandı: `scripts/evaluate.py` + `eval/questions.jsonl`, bkz.
+> [06-sensor-ve-degerlendirme.md](06-sensor-ve-degerlendirme.md). Aşağısı arka plan.
+
 LLM projelerinin en çok atlanan ama en önemli adımı. Önerilen minimum:
 
 1. Kullanıcılardan **30-50 gerçek soru** toplayın.
@@ -49,6 +52,10 @@ Otomatik kontrol fikri: cevaptaki tüm sayıları regex ile çıkarıp facts
 JSON'unda geçip geçmediğini kontrol edin → "uydurma sayı" oranı.
 
 ## 5.3 Sensör / durum izleme verisi ile gerçek kestirimci bakım
+
+> ✅ Temel sürümü eklendi: `sensor_health` aracı ve risk sıralamasıyla
+> birleştirme. Ayrıntılar: [06-sensor-ve-degerlendirme.md](06-sensor-ve-degerlendirme.md).
+> Aşağıdakiler bir sonraki adımlardır.
 
 İş emri geçmişi "ne zaman arızalandı?"yı söyler; sensör verisi "şu an nasıl?"
 sorusunu cevaplar. Elastic'te `cmms-readings` gibi bir index'iniz varsa

@@ -5,6 +5,7 @@ Kasıtlı olarak içine "hikâyeler" gömdük ki agent'ın bulup bulamadığın�
   - PMP-012 (Pompa 12): sık ama düzenli arıza (sabit oran)
   - KNV-001 (Konveyör 1): çok az arıza (sağlıklı)
   - "rulman" kelimesi geçen açıklamalar, arıza kodları, açık iş emirleri...
+  - Sensörler: KMP-003 titreşimi son haftada hızla artıyor, FRN-002 ısınıyor
 
 Kullanım:
     python scripts/seed_sample_data.py --reset
@@ -148,24 +149,85 @@ def generate(days: int, seed: int) -> list[dict]:
     return docs
 
 
+# Sensör (durum izleme) index'i: "uzun" format, her belge tek ölçüm.
+READINGS_MAPPING = {
+    "properties": {
+        "asset_id": {"type": "keyword"},
+        "metric": {"type": "keyword"},
+        "value": {"type": "float"},
+        "unit": {"type": "keyword"},
+        "@timestamp": {"type": "date"},
+    }
+}
+
+# metrik: (normal ortalama, gürültü std, birim)
+METRICS = {
+    "vibration_mm_s": (2.8, 0.25, "mm/s"),
+    "temperature_c": (55.0, 1.5, "°C"),
+    "current_a": (32.0, 1.0, "A"),
+}
+
+
+def generate_readings(days: int, seed: int) -> list[dict]:
+    """Saatlik sensör ölçümleri. Gömülü hikâyeler:
+      - KMP-003: son 7 günde titreşim hızla artıyor (rulman aşınması) -> kritik
+      - FRN-002: son 5 günde sıcaklık yavaşça artıyor -> uyarı
+      - diğerleri: normal (gürültü + günlük döngü)
+    """
+    rng = random.Random(seed + 1)
+    end = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    start = end - timedelta(days=days)
+    docs = []
+    for asset_id, *_ in ASSETS:
+        offset = rng.uniform(0.9, 1.1)          # her makinenin "normali" farklı
+        t = start
+        while t <= end:
+            days_left = (end - t).total_seconds() / 86400
+            for metric, (mu, sd, unit) in METRICS.items():
+                base = mu * offset
+                if metric == "temperature_c":   # vardiya/gün döngüsü
+                    base += 2.0 * math.sin(2 * math.pi * t.hour / 24)
+                v = rng.gauss(base, sd * offset)
+                if asset_id == "KMP-003" and metric == "vibration_mm_s" and days_left < 7:
+                    v += (7 - days_left) * 0.45          # ~+3 mm/s bir haftada
+                if asset_id == "FRN-002" and metric == "temperature_c" and days_left < 5:
+                    v += (5 - days_left) * 1.2
+                docs.append({"asset_id": asset_id, "metric": metric,
+                             "value": round(v, 3), "unit": unit,
+                             "@timestamp": t.isoformat()})
+            t += timedelta(hours=1)
+    return docs
+
+
+def load(es, index: str, mapping: dict, docs, reset: bool, id_field: str | None = None) -> int:
+    if reset and es.indices.exists(index=index):
+        es.indices.delete(index=index)
+    if not es.indices.exists(index=index):
+        es.indices.create(index=index, mappings=mapping,
+                          settings={"number_of_shards": 1, "number_of_replicas": 0})
+    actions = ({"_index": index, "_source": d, **({"_id": d[id_field]} if id_field else {})}
+               for d in docs)
+    ok, _ = helpers.bulk(es, actions, refresh="wait_for", chunk_size=2000)
+    return ok
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=365)
     ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--reset", action="store_true", help="index'i silip yeniden oluştur")
+    ap.add_argument("--reset", action="store_true", help="index'leri silip yeniden oluştur")
+    ap.add_argument("--readings-days", type=int, default=30,
+                    help="sensör verisi gün sayısı (0 = üretme)")
     args = ap.parse_args()
 
     s = load_settings()
     es = build_client(s)
-    if args.reset and es.indices.exists(index=s.wo_index):
-        es.indices.delete(index=s.wo_index)
-    if not es.indices.exists(index=s.wo_index):
-        es.indices.create(index=s.wo_index, mappings=MAPPING,
-                          settings={"number_of_shards": 1, "number_of_replicas": 0})
-    docs = generate(args.days, args.seed)
-    actions = ({"_index": s.wo_index, "_id": d["wo_id"], "_source": d} for d in docs)
-    ok, _ = helpers.bulk(es, actions, refresh="wait_for")
-    print(f"{ok} iş emri '{s.wo_index}' index'ine yüklendi.")
+    n = load(es, s.wo_index, MAPPING, generate(args.days, args.seed), args.reset, "wo_id")
+    print(f"{n} iş emri '{s.wo_index}' index'ine yüklendi.")
+    if args.readings_days > 0:
+        n = load(es, s.readings_index, READINGS_MAPPING,
+                 generate_readings(args.readings_days, args.seed), args.reset)
+        print(f"{n} sensör ölçümü '{s.readings_index}' index'ine yüklendi.")
 
 
 if __name__ == "__main__":

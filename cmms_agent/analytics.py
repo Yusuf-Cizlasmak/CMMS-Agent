@@ -234,6 +234,10 @@ def reliability_profile(asset_id: str, failure_times: list[datetime],
 
     # Weibull varsa onu tercih et (yaşlanmayı da hesaba katar), yoksa üstel.
     p = p_wb if p_wb is not None else p_exp
+    # Birkaç düzine olaydan uydurulan bir model %99.99 kesinlik iddia edemez.
+    # Nihai riski [%1, %99] aralığına sıkıştırıyoruz (ham değerler ayrıca raporlanır).
+    if p is not None:
+        p = min(max(p, 0.01), 0.99)
     return ReliabilityProfile(
         asset_id=asset_id,
         failures=len(failure_times),
@@ -252,3 +256,41 @@ def reliability_profile(asset_id: str, failure_times: list[datetime],
         risk_pct=p * 100 if p is not None else None,
         risk_level=risk_level(p),
     )
+
+
+# --------------------------------------------------------------------------- #
+# Sensör / durum izleme
+# --------------------------------------------------------------------------- #
+def sensor_deviation(base_mean: float | None, base_std: float | None,
+                     recent_mean: float | None, daily_means: list[float],
+                     trend_days: int = 7) -> dict:
+    """Bir metriğin "şu anki" durumunu kendi geçmişiyle karşılaştır.
+
+    - z-skoru: son dönem ortalaması, referans (baseline) dönemin dağılımından
+      kaç standart sapma uzakta?  |z|>=2 uyarı, |z|>=3 kritik.
+    - eğim: son `trend_days` günlük ortalamaların doğrusal eğimi, referans
+      ortalamanın yüzdesi olarak (%/gün). Yavaş ama istikrarlı bozulmayı
+      (ör. rulman aşınmasıyla artan titreşim) z-skorundan ÖNCE yakalar.
+
+    Neden sabit eşik (ör. "titreşim > 7 mm/s") değil? Her makinenin "normali"
+    farklıdır; kendi geçmişine göre sapma, ekipman bazında eşik girmeden çalışır.
+    ISO 10816 gibi standart eşikleriniz varsa ikisini birlikte kullanın.
+    """
+    z = None
+    if base_mean is not None and recent_mean is not None and base_std and base_std > 0:
+        z = (recent_mean - base_mean) / base_std
+    slope_pct = None
+    pts = [v for v in daily_means if v is not None][-trend_days:]
+    if len(pts) >= 3 and base_mean:
+        _, b = linear_trend(pts)
+        slope_pct = 100 * b / abs(base_mean)
+    az, s = abs(z) if z is not None else 0.0, slope_pct or 0.0
+    if az >= 3 or s >= 5:
+        status = "kritik"
+    elif az >= 2 or s >= 2:
+        status = "uyarı"
+    elif z is None and slope_pct is None:
+        status = "yetersiz_veri"
+    else:
+        status = "normal"
+    return {"z_score": z, "trend_pct_per_day": slope_pct, "status": status}

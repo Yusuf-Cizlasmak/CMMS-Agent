@@ -29,6 +29,8 @@ ctx = ToolContext(repo=repo, default_days=365)
     ("failure_modes", {}),
     ("search_workorders", {"text": "rulman"}),
     ("open_backlog", {}),
+    ("sensor_health", {}),
+    ("sensor_health", {"asset_id": "KMP-003"}),
 ])
 def test_tool_runs(name, args):
     out = TOOLS[name].fn(ctx, args)
@@ -40,3 +42,13 @@ def test_seeded_story_is_found():
     assert "KMP-003" in [r["asset_id"] for r in top["ranking"]]
     rel = TOOLS["asset_reliability"].fn(ctx, {"asset_id": "KMP-003"})
     assert rel["asset_id"] == "KMP-003" and rel["failures"] >= 5
+
+
+def test_sensor_story_is_found():
+    out = TOOLS["sensor_health"].fn(ctx, {})
+    by = {(r["asset_id"], r["metric"]): r["status"] for r in out["readings"]}
+    assert by.get(("KMP-003", "vibration_mm_s")) == "kritik"
+    assert by.get(("FRN-002", "temperature_c")) in ("uyarı", "kritik")
+    top = TOOLS["failure_risk_ranking"].fn(ctx, {"top_n": 1})
+    assert top["sensor_data"] and top["ranking"][0]["asset_id"] == "KMP-003"
+    assert top["ranking"][0]["sensor_status"] == "kritik"

@@ -1,0 +1,27 @@
+# Değerlendirme seti: {"q": soru, "tool": beklenen araç, "args": beklenen argümanların alt kümesi}
+# Kendi kullanıcılarınızın GERÇEK sorularıyla genişletin (hedef: 30-50 soru).
+{"q": "Önümüzdeki ay hangi ekipmanlar arızalanabilir?", "tool": "failure_risk_ranking", "args": {"horizon_days": 30}}
+{"q": "En riskli 3 makine hangisi?", "tool": "failure_risk_ranking", "args": {"top_n": 3}}
+{"q": "Gelecek hafta arıza çıkarması muhtemel ekipmanlar", "tool": "failure_risk_ranking", "args": {"horizon_days": 7}}
+{"q": "KMP-003 için 2 hafta içinde arıza riski nedir?", "tool": "asset_reliability", "args": {"asset_id": "KMP-003", "horizon_days": 14}}
+{"q": "PMP-012'nin MTBF ve MTTR değerleri nedir?", "tool": "asset_reliability", "args": {"asset_id": "PMP-012"}}
+{"q": "CNC-007 bozulur mu yakında?", "tool": "asset_reliability", "args": {"asset_id": "CNC-007"}}
+{"q": "Son 90 günde en çok arıza yapan 5 makine", "tool": "top_failing_assets", "args": {"days": 90, "top_n": 5}}
+{"q": "En çok duruşa sebep olan ekipmanlar hangileri?", "tool": "top_failing_assets", "args": {"sort_by": "downtime"}}
+{"q": "Hangi makine en sorunlu?", "tool": "top_failing_assets"}
+{"q": "Açık iş emirleri ne durumda?", "tool": "open_backlog"}
+{"q": "Bekleyen işler var mı KMP-003 için?", "tool": "open_backlog", "args": {"asset_id": "KMP-003"}}
+{"q": "Arıza sayısı aylık olarak artıyor mu?", "tool": "workorder_trend", "args": {"interval": "month"}}
+{"q": "Son 6 ayın haftalık iş emri trendi", "tool": "workorder_trend", "args": {"days": 180, "interval": "week"}}
+{"q": "En sık görülen arıza kodları", "tool": "failure_modes"}
+{"q": "KMP-003'te hangi arızalar oluyor, kök neden ne olabilir?", "tool": "failure_modes", "args": {"asset_id": "KMP-003"}}
+{"q": "'rulman ses' geçen iş emirleri", "tool": "search_workorders", "args": {"text": "rulman ses"}}
+{"q": "Yağ kaçağına benzer kayıtları bul", "tool": "search_workorders", "args": {"text": "yağ kaçağı"}}
+{"q": "Bu yılın bakım KPI özeti", "tool": "kpi_summary"}
+{"q": "Son 30 günün genel durumu ve maliyeti", "tool": "kpi_summary", "args": {"days": 30}}
+{"q": "PM uyum oranımız kaç?", "tool": "kpi_summary"}
+{"q": "Sensörlerde anormal bir durum var mı?", "tool": "sensor_health"}
+{"q": "KMP-003 titreşim değerleri nasıl?", "tool": "sensor_health", "args": {"asset_id": "KMP-003"}}
+{"q": "Fırınların sıcaklığı normal mi?", "tool": "sensor_health"}
+{"q": "MTBF nedir?", "tool": "none"}
+{"q": "Weibull beta değeri ne demek?", "tool": "none"}
