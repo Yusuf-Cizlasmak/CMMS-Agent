@@ -52,3 +52,48 @@ def test_sensor_story_is_found():
     top = TOOLS["failure_risk_ranking"].fn(ctx, {"top_n": 1})
     assert top["sensor_data"] and top["ranking"][0]["asset_id"] == "KMP-003"
     assert top["ranking"][0]["sensor_status"] == "kritik"
+
+
+@pytest.fixture(scope="module")
+def turkish_index():
+    """Mapping VERMEDEN yüklenmiş (dinamik mapping: text + .keyword) Türkçe index."""
+    from elasticsearch import helpers
+    idx = "test-tr-isemirleri"
+    if repo.es.indices.exists(index=idx):
+        repo.es.indices.delete(index=idx)
+    docs = [{"IsEmriNo": f"IE-{i}", "Ekipman": "KMP-03" if i % 3 else "PMP-12",
+             "IsEmriTipi": "Arıza" if i % 2 else "Periyodik Bakım",
+             "Durum": "Açık" if i % 5 == 0 else "Kapalı", "Lokasyon": {"Hat": "Hat-A"},
+             "AcilisTarihi": f"2026-0{1 + i % 9}-1{i % 10}T08:00:00Z", "DurusSuresi": 1.5,
+             "ArizaAciklamasi": "Rulmandan ses geliyor"} for i in range(60)]
+    helpers.bulk(repo.es, ({"_index": idx, "_source": d} for d in docs), refresh="wait_for")
+    yield idx
+    repo.es.indices.delete(index=idx)
+
+
+def test_discover_and_run_tools_on_turkish_index(turkish_index):
+    """Uçtan uca: keşfet -> öneriyi ayar yap -> araçlar çalışsın."""
+    import dataclasses
+
+    from cmms_agent.discovery import discover
+
+    rep = discover(repo.es, turkish_index)
+    m = {sg.role: sg.field for sg in rep.suggestions}
+    assert m["asset"] == "Ekipman.keyword" and m["created_at"] == "AcilisTarihi"
+    assert rep.value_suggestions["CMMS_CORRECTIVE_VALUES"] == ["Arıza"]
+
+    fm = dataclasses.replace(
+        s.fields, asset=m["asset"], wo_type=m["wo_type"], status=m["status"],
+        created_at=m["created_at"], downtime_hours=m["downtime_hours"],
+        description=m["description"], wo_id=m["wo_id"], location=m["location"],
+        corrective_values=tuple(rep.value_suggestions["CMMS_CORRECTIVE_VALUES"]),
+        open_status_values=tuple(rep.value_suggestions["CMMS_OPEN_STATUS_VALUES"]))
+    s2 = dataclasses.replace(s, wo_index=turkish_index, fields=fm, readings_index="yok")
+    ctx2 = ToolContext(repo=CMMSRepository(repo.es, s2), default_days=3650)
+
+    rel = TOOLS["asset_reliability"].fn(ctx2, {"asset_id": "kmp-03"})
+    assert rel["asset_id"] == "KMP-03" and rel["failures"] > 5
+    hits = TOOLS["search_workorders"].fn(ctx2, {"text": "rulman"})["matches"]
+    assert hits and all(h["Ekipman"] in ("KMP-03", "PMP-12") for h in hits)  # önek + _source yolu
+    backlog = TOOLS["open_backlog"].fn(ctx2, {})
+    assert backlog["open_total"] == 12 and backlog["oldest_open"][0]["IsEmriNo"]

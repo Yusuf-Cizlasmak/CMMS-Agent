@@ -7,6 +7,7 @@ index'inize uyarlayabilmeniz için alan adlarını da buraya aldık.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -24,7 +25,12 @@ def _load_dotenv(path: str = ".env") -> None:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+        value = value.strip()
+        if value[:1] in ('"', "'"):
+            value = value[1:].split(value[0], 1)[0]     # tırnak içi aynen
+        else:
+            value = re.split(r"\s+#", value, maxsplit=1)[0].strip()   # satır sonu yorumu
+        os.environ.setdefault(key.strip(), value)
 
 
 def _env(key: str, default: str = "") -> str:

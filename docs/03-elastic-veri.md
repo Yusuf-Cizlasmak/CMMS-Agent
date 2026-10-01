@@ -24,6 +24,60 @@ Cevaplamanız gereken sorular:
 
 `python -m cmms_agent doctor` bu kontrollerin bir kısmını otomatik yapar.
 
+### Otomatik keşif: `discover`
+
+Bu soruların çoğunu sizin yerinize cevaplayan bir komut var:
+
+```bash
+python -m cmms_agent discover                         # .env'deki index'ler
+python -m cmms_agent discover --index fabrika-bakim-isemirleri --write .env.discovered
+```
+
+Komut şunları yapar:
+1. `_field_caps` ile tüm alanları ve tiplerini alır (`.keyword` alt alanları
+   ve `Lokasyon.Hat` gibi iç içe yollar dahil).
+2. Türkçe ve İngilizce yaygın isimlere bakarak (`Ekipman`, `IsEmriTipi`,
+   `AcilisTarihi`, `asset_id`, `created_at`...) her rol için uygun tipte en
+   iyi alanı seçer.
+3. Tip ve durum alanlarının **gerçek değerlerini** `terms` aggregation ile
+   çeker, sonra `Arıza`/`CM` → düzeltici, `Periyodik Bakım`/`PM` → önleyici,
+   `Açık`/`Beklemede` → açık iş gibi sınıflandırır.
+4. Bunları güven seviyesi ve alternatiflerle `.env` formatında yazar.
+
+Örnek çıktı (mapping verilmeden yüklenmiş Türkçe bir index):
+```
+CMMS_FIELD_ASSET=Ekipman.keyword   # keyword, güven: yüksek  (alternatifler: EkipmanAdi.keyword)
+CMMS_FIELD_TYPE=IsEmriTipi.keyword   # keyword, güven: yüksek
+CMMS_FIELD_CREATED_AT=AcilisTarihi   # date, güven: yüksek  (alternatifler: KapanisTarihi)
+# CMMS_FIELD_STARTED_AT=   # BULUNAMADI — elle doldurun
+CMMS_CORRECTIVE_VALUES=Arıza
+CMMS_OPEN_STATUS_VALUES=Açık,Beklemede
+#   wo_type alanının değerleri: Arıza (115), Kalibrasyon (74), Periyodik Bakım (59), Kestirimci (52)
+```
+Çıktıyı **mutlaka gözden geçirin.** Örneğin "Kestirimci" iş emirlerini
+arıza sayıp saymayacağınız bir iş kararıdır; komut bunu sizin yerinize
+vermez, sadece değerleri listeler. Mevcut `.env` dosyanıza asla dokunmaz.
+
+> **Keşif neden kurulumda bir kez yapılıyor da her soruda yapılmıyor?**
+> Şemayı her soruda LLM'e göstermek, her soruya bir LLM turu ve yüzlerce
+> token ekler. Küçük model de doğru alanı yine tahmin etmek zorunda kalır.
+> Kararı bir kez, insan onayıyla vermek hem hızlı hem güvenilirdir
+> (bkz. [07-eski-agent-dersleri.md](07-eski-agent-dersleri.md)).
+
+### Dikkat: `.keyword` alanları `_source` içinde yoktur
+
+Dinamik mapping her string'i `text` olarak tanımlar ve altına bir `.keyword`
+alt alanı (multi-field) ekler:
+- **Filtre ve aggregation** için `Ekipman.keyword` kullanılır.
+- **Belgeyi okurken** (`_source`) alan hâlâ `Ekipman` adını taşır.
+  `Ekipman.keyword` diye bir anahtar yoktur.
+
+Bu proje bunu `es_client.source_path()` / `project()` ile otomatik çözer:
+`.env`'ye `Ekipman.keyword` yazmanız yeterli. İç içe nesneler
+(`{"Lokasyon": {"Hat": "Hat-A"}}` → `Lokasyon.Hat`) de aynı şekilde okunur.
+Bu hata ancak gerçekçi, Türkçe adlı bir index'le test edilince ortaya çıktı;
+artık `tests/test_es_integration.py` bunu koruyor.
+
 ## 3.2 Güvenlik: sadece okuma yetkili API key
 
 Agent'a asla `elastic` süper kullanıcısını vermeyin.
@@ -119,8 +173,17 @@ denemek için harikadır; DSL'e göre çok daha okunaklıdır.
 
 ### (4) Tam metin arama — benzer arızaları bulmak
 `description` alanı `turkish` analyzer'lı `text` olursa "rulmanlar",
-"rulmandan" gibi çekimler de eşleşir. `search_workorders` bunu `multi_match`
-+ `fuzziness: AUTO` ile kullanır.
+"rulmandan" gibi çekimler de eşleşir. Ama dinamik mapping'de bu analyzer
+**yoktur**: "rulman" araması "Rulmandan ses geliyor" kaydını bulamaz.
+Bulanık eşleşme (`fuzziness`) de 3 harflik bir eki tolere etmez.
+
+`search_workorders` bu yüzden iki sorguyu birleştirir (`should`):
+- `multi_match` + `fuzziness: AUTO`: yazım hataları için ("rulamn").
+- `simple_query_string` ile **önek** araması (`rulman*`): Türkçe eklemeli
+  bir dil olduğu için, kök + `*` çekimlerin çoğunu yakalar.
+
+Kalıcı çözüm: index mapping'inde açıklama alanına `"analyzer": "turkish"`
+vermek (yeni bir index + reindex gerektirir).
 
 İleride: açıklamaları bir embedding modeliyle vektöre çevirip `dense_vector`
 alanına yazarak **anlamsal arama** ("motor ısınıyor" ≈ "aşırı sıcaklık

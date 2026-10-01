@@ -11,13 +11,14 @@ geçmemeli; bu, Jetson'da prompt işleme (prefill) süresini doğrudan kısaltı
 """
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from . import analytics as A
-from .es_client import CMMSRepository
+from .es_client import CMMSRepository, source_path
 
 
 @dataclass
@@ -287,6 +288,13 @@ def failure_modes(ctx: ToolContext, args: dict) -> dict:
     }
 
 
+def _words(text: str) -> list[str]:
+    """Önek araması için sorgu kelimeleri: küçük harf (Türkçe uyumlu), 3+ harf,
+    simple_query_string operatörlerinden arındırılmış."""
+    low = text.replace("İ", "i").replace("I", "ı").lower()
+    return [w for w in re.findall(r"\w+", low) if len(w) >= 3][:6]
+
+
 def search_workorders(ctx: ToolContext, args: dict) -> dict:
     repo, f = ctx.repo, ctx.repo.f
     text = (args.get("text") or "").strip()
@@ -296,8 +304,18 @@ def search_workorders(ctx: ToolContext, args: dict) -> dict:
     asset = resolve_asset(ctx, args.get("asset_id"))
     q = repo.bool_query(
         repo.time_filter(days), repo.asset_filter(asset) if asset else None,
-        must=[{"multi_match": {"query": text, "fields": [f.description, f.failure_code],
-                               "fuzziness": "AUTO"}}],
+        must=[{"bool": {"should": [
+            # 1) Yazım hatalarına toleranslı eşleşme ("rulamn" -> "rulman")
+            {"multi_match": {"query": text, "fields": [f.description, f.failure_code],
+                             "fuzziness": "AUTO"}},
+            # 2) Önek eşleşmesi: Türkçe eklemeli bir dil. "rulman*" -> rulmandan,
+            #    rulmanı, rulmanlar... Index'te `turkish` analyzer YOKSA (dinamik
+            #    mapping'de olmaz) bu sorgu kurtarıcıdır.
+            {"simple_query_string": {
+                "query": " ".join(f"{w}*" for w in _words(text)),
+                "fields": [f.description], "analyze_wildcard": True,
+                "default_operator": "and"}},
+        ], "minimum_should_match": 1}}],
     )
     src = [f.wo_id, f.asset, f.created_at, f.wo_type, f.failure_code, f.description,
            f.downtime_hours]
@@ -305,7 +323,9 @@ def search_workorders(ctx: ToolContext, args: dict) -> dict:
     for h in hits:
         d = h.get(f.description) or ""
         h[f.description] = d[:160] + ("…" if len(d) > 160 else "")
-    return {"query": text, "period_days": days, "matches": hits}
+    # LLM'e ".keyword" gibi teknik son ekler göstermeye gerek yok
+    matches = [{source_path(k): _r(v) for k, v in h.items() if v is not None} for h in hits]
+    return {"query": text, "period_days": days, "matches": matches}
 
 
 def open_backlog(ctx: ToolContext, args: dict) -> dict:
@@ -324,6 +344,7 @@ def open_backlog(ctx: ToolContext, args: dict) -> dict:
     for o in oldest:
         ts = A.parse_ts(o.get(f.created_at))
         o["age_days"] = _r((now - ts).total_seconds() / 86400, 1) if ts else None
+    oldest = [{source_path(k): v for k, v in o.items()} for o in oldest]
     return {
         "asset_id": asset, "open_total": r["_total"],
         "by_priority": _bucket_map(r["by_priority"]),

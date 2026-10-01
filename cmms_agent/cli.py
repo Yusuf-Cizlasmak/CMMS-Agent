@@ -1,6 +1,7 @@
 """Komut satırı arayüzü.
 
     python -m cmms_agent doctor                  # bağlantı + mapping kontrolü
+    python -m cmms_agent discover --index X      # alan eşleştirmesini otomatik öner
     python -m cmms_agent ask "En riskli 5 ekipman?" --debug
     python -m cmms_agent chat                    # etkileşimli sohbet
     python -m cmms_agent tool failure_risk_ranking --args '{"days":365}'   # LLM'siz
@@ -73,12 +74,43 @@ def cmd_doctor(s) -> int:
         print("ULAŞILAMIYOR")
     llm = LLMClient(s)
     print(f"LLM            {s.llm_base_url} ({s.llm_model}) ... ", end="")
-    if llm.health():
-        print("OK")
-    else:
+    models = llm.models()
+    if models is None:
         ok = False
         print("ULAŞILAMIYOR (ollama serve / llama-server çalışıyor mu?)")
+    elif models and not any(m == s.llm_model or m.split(":")[0] == s.llm_model
+                            for m in models):
+        # llama-server tek model sunar ve adı umursamaz; Ollama'da ise ad önemlidir.
+        print(f"UYARI: '{s.llm_model}' sunucuda yok. Mevcut: {', '.join(models[:8])}")
+        print("               (Ollama: ollama pull <model> veya ollama create cmms-llm -f deploy/Modelfile)")
+    else:
+        print("OK")
     return 0 if ok else 1
+
+
+def cmd_discover(s, index: str | None, readings_index: str | None, write: str | None) -> int:
+    from .discovery import discover, list_indices
+    from .es_client import build_client
+
+    es = build_client(s)
+    index = index or s.wo_index
+    if not es.indices.exists(index=index):
+        print(f"'{index}' bulunamadı. Mevcut index'ler:")
+        for r in list_indices(es):
+            print(f"  {r['index']:<40} {r['docs.count']:>10} belge  {r['store.size']}")
+        print("Örnek: python -m cmms_agent discover --index <iş-emri-index'i>")
+        return 1
+    rep = discover(es, index, readings_index or s.readings_index)
+    text = rep.env_text()
+    print(text)
+    for env in rep.missing + rep.reading_missing:
+        print(f"⚠ Zorunlu alan bulunamadı: {env}", file=sys.stderr)
+    if write:
+        with open(write, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        print(f"Yazıldı: {write}  (kontrol edip .env'ye taşıyın; mevcut .env değiştirilmedi)",
+              file=sys.stderr)
+    return 1 if rep.missing else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -87,6 +119,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("-v", "--verbose", action="store_true")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("doctor")
+    d = sub.add_parser("discover", help="Index'i inceleyip .env alan eşleştirmesi öner")
+    d.add_argument("--index", help="iş emri index'i (varsayılan: CMMS_WO_INDEX)")
+    d.add_argument("--readings-index", help="sensör index'i (varsayılan: CMMS_READINGS_INDEX)")
+    d.add_argument("--write", metavar="DOSYA", help="öneriyi dosyaya yaz (ör. .env.discovered)")
     a = sub.add_parser("ask")
     a.add_argument("question")
     a.add_argument("--debug", action="store_true")
@@ -104,6 +140,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "doctor":
         return cmd_doctor(s)
+    if args.cmd == "discover":
+        return cmd_discover(s, args.index, args.readings_index, args.write)
 
     from . import build_agent
     agent = build_agent(s)

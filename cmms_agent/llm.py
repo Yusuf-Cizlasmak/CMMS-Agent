@@ -121,6 +121,15 @@ class LLMClient:
                 if delta:
                     yield delta
 
+    def models(self) -> list[str] | None:
+        """Sunucudaki model adları (/v1/models). Ulaşılamazsa None."""
+        try:
+            r = self.http.get("/models", timeout=3)
+            r.raise_for_status()
+            return [m.get("id", "") for m in r.json().get("data", [])]
+        except (httpx.HTTPError, ValueError):
+            return None
+
     def health(self) -> bool:
         try:
             return self.http.get("/models", timeout=3).status_code == 200

@@ -31,6 +31,7 @@ tasarlandı. Kodun her dosyası *neden* öyle yazıldığını açıklar.
 | 4 | [docs/04-analitik-ve-ongoru.md](docs/04-analitik-ve-ongoru.md) | MTBF, MTTR, Weibull, Laplace trend testi — öngörünün matematiği |
 | 5 | [docs/05-genisletme.md](docs/05-genisletme.md) | Yeni araç ekleme, gelişmiş modeller, RAG, ince ayar (LoRA) |
 | 6 | [docs/06-sensor-ve-degerlendirme.md](docs/06-sensor-ve-degerlendirme.md) | Sensör verisiyle durum izleme, agent'ı ölçmek (eval) |
+| 7 | [docs/07-eski-agent-dersleri.md](docs/07-eski-agent-dersleri.md) | Gerçek bir vaka: önceki "universal" ReAct agent neden yavaştı? |
 
 ## Mimari (özet)
 
@@ -75,6 +76,16 @@ python -m cmms_agent doctor
 python -m cmms_agent ask "Önümüzdeki ay hangi ekipmanlar arızalanabilir?" --debug
 python -m cmms_agent chat
 ```
+
+### Kendi Elastic index'inize bağlamak
+
+```bash
+python -m cmms_agent discover --index <iş-emri-index'iniz> --write .env.discovered
+# Önerileri gözden geçirip .env'ye taşıyın, sonra:
+python -m cmms_agent doctor
+```
+`discover` alan adlarını (Türkçe/İngilizce, `.keyword`, iç içe yollar) ve
+"Arıza/Periyodik Bakım/Açık/Kapalı" gibi değerleri otomatik eşleştirir.
 
 ### B) Jetson Orin Nano'ya kur
 
@@ -132,6 +143,7 @@ cmms_agent/
   agent.py       # orkestrasyon, anlatıcı prompt'u, zamanlama ölçümü
   cache.py       # TTL önbellek
   evaluation.py  # router doğruluğu + sayı dayanaklılığı (grounding) ölçümü
+  discovery.py   # index şemasından .env alan eşleştirmesi önerme
   cli.py, api.py # arayüzler
   static/        # web sohbet arayüzü (tek HTML dosyası)
 eval/            # değerlendirme soru seti

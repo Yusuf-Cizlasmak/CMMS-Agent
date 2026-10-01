@@ -36,6 +36,33 @@ def build_client(s: Settings) -> Elasticsearch:
     return Elasticsearch(s.es_url, **kwargs)
 
 
+def source_path(field: str) -> str:
+    """Aggregation/filtre alanı -> _source'taki yol.
+
+    `Ekipman.keyword` bir *multi-field*'dır: sadece index'te yaşar, _source'ta
+    yoktur. Belgeyi okurken asıl alan adı (`Ekipman`) kullanılmalıdır.
+    """
+    return field[: -len(".keyword")] if field.endswith(".keyword") else field
+
+
+def get_path(doc: dict, path: str) -> Any:
+    """`Lokasyon.Hat` gibi noktalı yolu iç içe _source sözlüğünde bul."""
+    if path in doc:                      # düz anahtar ("a.b" adıyla yazılmış olabilir)
+        return doc[path]
+    cur: Any = doc
+    for part in path.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return None
+        cur = cur[part]
+    return cur
+
+
+def project(doc: dict, fields: list[str]) -> dict:
+    """_source'u, istenen (yapılandırılmış) alan adlarıyla düz bir sözlüğe çevir.
+    Araç kodu böylece `doc.get(f.asset)` diyebilir; mapping ne olursa olsun."""
+    return {f: get_path(doc, source_path(f)) for f in fields}
+
+
 class CMMSRepository:
     """Agent araçlarının kullandığı tüm Elastic sorguları burada."""
 
@@ -80,9 +107,10 @@ class CMMSRepository:
                sort: list | None = None) -> list[dict]:
         resp = self.es.search(
             index=self.s.wo_index, query=query, size=size,
-            source=source, sort=sort,
+            source=[source_path(f) for f in source] if source else None, sort=sort,
         )
-        return [h["_source"] for h in resp["hits"]["hits"]]
+        hits = [h.get("_source", {}) for h in resp["hits"]["hits"]]
+        return [project(h, source) for h in hits] if source else hits
 
     def iter_docs(self, query: dict, source: list[str], page_size: int = 2000
                   ) -> Iterator[dict]:
@@ -100,7 +128,7 @@ class CMMSRepository:
                 kwargs: dict[str, Any] = {
                     "query": query,
                     "size": min(page_size, self.s.max_docs - fetched),
-                    "source": source,
+                    "source": [source_path(f) for f in source],
                     "pit": {"id": pit_id, "keep_alive": "1m"},
                     # _shard_doc: PIT ile gelen en ucuz, benzersiz tie-breaker
                     "sort": [{self.f.created_at: "asc"}, {"_shard_doc": "asc"}],
@@ -114,7 +142,7 @@ class CMMSRepository:
                     break
                 pit_id = resp.get("pit_id", pit_id)
                 for h in hits:
-                    yield h["_source"]
+                    yield project(h.get("_source", {}), source)
                 fetched += len(hits)
                 search_after = hits[-1]["sort"]
             if fetched >= self.s.max_docs:
